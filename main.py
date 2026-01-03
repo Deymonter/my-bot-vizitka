@@ -3,7 +3,7 @@ import logging
 import os
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.client.session.aiohttp import AiohttpSession
@@ -15,17 +15,11 @@ MY_LINK = "https://t.me/ShermentaI"
 logging.basicConfig(level=logging.INFO)
 
 # --- УМНАЯ НАСТРОЙКА ПРОКСИ ---
-# Проверяем, запущен ли скрипт на PythonAnywhere
 if 'PYTHONANYWHERE_DOMAIN' in os.environ:
-    # Мы на сервере! Включаем прокси
     session = AiohttpSession(proxy="http://proxy.server:3128")
-    print("🟢 Работаем на сервере (через прокси)")
 else:
-    # Мы дома! Прокси не нужен
     session = None
-    print("🟡 Работаем локально (без прокси)")
 
-# Создаем бота
 bot = Bot(
     token=BOT_TOKEN,
     session=session, 
@@ -33,7 +27,7 @@ bot = Bot(
 )
 dp = Dispatcher()
 
-# --- ФУНКЦИЯ: ГЛАВНОЕ МЕНЮ ---
+# --- ФУНКЦИЯ: ГЛАВНОЕ МЕНЮ (Инлайн кнопки) ---
 def get_main_menu():
     builder = InlineKeyboardBuilder()
     builder.row(types.InlineKeyboardButton(text="🛠 Услуги", callback_data="services"))
@@ -42,17 +36,38 @@ def get_main_menu():
     builder.row(types.InlineKeyboardButton(text="📩 Написать мне", url=MY_LINK)) 
     return builder.as_markup()
 
+# --- ФУНКЦИЯ: КНОПКА "СТАРТ" ВНИЗУ (Реплай кнопка) ---
+def get_start_button():
+    builder = ReplyKeyboardBuilder()
+    builder.add(types.KeyboardButton(text="🏠 Главное меню"))
+    # resize_keyboard=True делает кнопку компактной, чтобы не занимала пол-экрана
+    return builder.as_markup(resize_keyboard=True)
+
 # --- ХЕНДЛЕРЫ ---
 
+# 1. Обработка команды /start
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
+    # Отправляем сообщение с нижней кнопкой (чтобы она появилась)
     await message.answer(
         "👋 <b>Приветствую!</b>\n"
-        "Я бот-визитка. Здесь вы можете узнать о моих услугах и посмотреть примеры работ.\n\n"
+        "Я бот-визитка. Чтобы не потеряться, внизу теперь есть кнопка меню.",
+        reply_markup=get_start_button() # <-- Тут цепляем нижнюю кнопку
+    )
+    
+    # Следом отправляем само красивое меню с услугами
+    await message.answer(
         "Выберите раздел:",
         reply_markup=get_main_menu()
     )
 
+# 2. Обработка нажатия на нижнюю кнопку "🏠 Главное меню"
+@dp.message(F.text == "🏠 Главное меню")
+async def menu_button_click(message: types.Message):
+    # Просто вызываем ту же функцию, что и при /start
+    await cmd_start(message)
+
+# 3. Кнопка "НАЗАД"
 @dp.callback_query(F.data == "back_home")
 async def go_back(callback: types.CallbackQuery):
     try:
@@ -68,6 +83,7 @@ async def go_back(callback: types.CallbackQuery):
         )
     await callback.answer()
 
+# 4. Остальные разделы (Услуги, Портфолио, Цены)
 @dp.callback_query(F.data == "services")
 async def send_services(callback: types.CallbackQuery):
     builder = InlineKeyboardBuilder()
@@ -90,7 +106,7 @@ async def send_portfolio(callback: types.CallbackQuery):
     
     await callback.message.answer_photo(
         photo="https://upload.wikimedia.org/wikipedia/commons/thumb/c/c3/Python-logo-notext.svg/1200px-Python-logo-notext.svg.png",
-        caption="📂 <b>Пример работы:</b>\n\nЭто демонстрация отправки медиа-файлов. В реальном проекте здесь будет скриншот вашего бота.",
+        caption="📂 <b>Пример работы:</b>\n\nВ реальном проекте здесь будет скриншот вашего бота.",
         reply_markup=builder.as_markup()
     )
     await callback.answer()
