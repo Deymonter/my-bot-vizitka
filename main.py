@@ -27,9 +27,9 @@ bot = Bot(
 )
 dp = Dispatcher()
 
-# === ПАМЯТЬ БОТА (Словарь для хранения ID последних сообщений) ===
-# Структура: {user_id: message_id}
-users_last_msg = {}
+# === ЖУРНАЛ СООБЩЕНИЙ (Чтобы удалять всё лишнее) ===
+# Формат: {user_id: [id_сообщения_1, id_сообщения_2, ...]}
+users_msg_stack = {}
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 
@@ -46,81 +46,79 @@ def get_start_button():
     builder.add(types.KeyboardButton(text="🏠 Главное меню"))
     return builder.as_markup(resize_keyboard=True)
 
-# Функция для удаления старого сообщения (очистка чата)
-async def clear_previous_message(chat_id: int, user_id: int):
-    # Если у нас записано старое сообщение для этого юзера
-    if user_id in users_last_msg:
-        old_msg_id = users_last_msg[user_id]
-        try:
-            await bot.delete_message(chat_id=chat_id, message_id=old_msg_id)
-        except:
-            # Если сообщение уже удалено или слишком старое, просто игнорируем ошибку
-            pass
+# Функция: Полная очистка чата от старых сообщений бота
+async def clean_chat(chat_id: int, user_id: int):
+    if user_id in users_msg_stack:
+        for msg_id in users_msg_stack[user_id]:
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=msg_id)
+            except:
+                pass
+        # Очищаем список после удаления
+        users_msg_stack[user_id] = []
+
+# Функция: Добавить сообщение в список на удаление
+def add_msg_to_stack(user_id, msg_id):
+    if user_id not in users_msg_stack:
+        users_msg_stack[user_id] = []
+    users_msg_stack[user_id].append(msg_id)
 
 # --- ХЕНДЛЕРЫ ---
 
-# 1. Обработка команды /start
+# 1. ГЛАВНОЕ МЕНЮ (СТАРТ)
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
     
-    # Сначала удаляем старое меню, если оно было
-    await clear_previous_message(message.chat.id, user_id)
+    # 1. Удаляем ВСЕ старые сообщения бота
+    await clean_chat(message.chat.id, user_id)
     
-    # Удаляем само сообщение "/start", которое написал юзер (для красоты)
+    # 2. Удаляем сообщение юзера "/start" (или "Главное меню")
     try:
         await message.delete()
     except:
         pass
 
-    # Отправляем новое сообщение
-    sent_msg = await message.answer(
+    # 3. Отправляем приветствие (Сообщение №1)
+    msg1 = await message.answer(
         "👋 <b>Приветствую!</b>\n"
-        "Я бот-визитка. Чтобы не потеряться, внизу есть кнопка меню.",
+        "Я бот-визитка. Чтобы не потеряться, внизу теперь есть кнопка меню.",
         reply_markup=get_start_button() 
     )
     
-    # Отправляем инлайн-меню
-    menu_msg = await message.answer(
+    # 4. Отправляем меню с кнопками (Сообщение №2)
+    msg2 = await message.answer(
         "Выберите раздел:",
         reply_markup=get_main_menu()
     )
     
-    # Запоминаем ID этого меню, чтобы потом его удалить
-    users_last_msg[user_id] = menu_msg.message_id
+    # Запоминаем ОБА сообщения, чтобы потом удалить их оба
+    add_msg_to_stack(user_id, msg1.message_id)
+    add_msg_to_stack(user_id, msg2.message_id)
 
-# 2. Обработка нажатия на кнопку "🏠 Главное меню"
+# 2. Обработка нажатия на нижнюю кнопку
 @dp.message(F.text == "🏠 Главное меню")
 async def menu_button_click(message: types.Message):
-    # Удаляем текст "🏠 Главное меню", который отправил юзер
-    try:
-        await message.delete()
-    except:
-        pass
-        
-    # Запускаем логику старта (она сама почистит старое меню бота)
     await cmd_start(message)
 
-# 3. Кнопка "НАЗАД"
+# 3. Кнопка "НАЗАД" (Редактирует нижнее сообщение)
 @dp.callback_query(F.data == "back_home")
 async def go_back(callback: types.CallbackQuery):
     try:
+        # Редактируем только нижнее сообщение (меню)
         await callback.message.edit_text(
             "👋 <b>Главное меню:</b>\n"
             "Чем могу помочь?",
             reply_markup=get_main_menu()
         )
     except:
-        new_msg = await callback.message.answer(
-            "👋 <b>Главное меню:</b>",
-            reply_markup=get_main_menu()
-        )
-        # Если пришлось отправить новое, обновляем запись в памяти
-        users_last_msg[callback.from_user.id] = new_msg.message_id
+        # Если редактировать нельзя, шлем новое и запоминаем его
+        msg = await callback.message.answer("👋 <b>Главное меню:</b>", reply_markup=get_main_menu())
+        add_msg_to_stack(callback.from_user.id, msg.message_id)
         
     await callback.answer()
 
-# 4. Остальные разделы
+# 4. УСЛУГИ
 @dp.callback_query(F.data == "services")
 async def send_services(callback: types.CallbackQuery):
     builder = InlineKeyboardBuilder()
@@ -128,39 +126,44 @@ async def send_services(callback: types.CallbackQuery):
     
     await callback.message.edit_text(
         "🛠 <b>Мои услуги:</b>\n\n"
-        "🔹 <b>Чат-боты под ключ</b> (Магазины, Визитки, Админы)\n"
-        "🔹 <b>Парсинг данных</b> (Сбор информации с сайтов)\n"
-        "🔹 <b>Скрипты автоматизации</b> (Python)",
+        "🔹 <b>Чат-боты под ключ</b> (Магазины, Визитки)\n"
+        "🔹 <b>Парсинг данных</b>\n"
+        "🔹 <b>Автоматизация</b>",
         reply_markup=builder.as_markup()
     )
     await callback.answer()
 
+# 5. ПОРТФОЛИО (Фото)
 @dp.callback_query(F.data == "portfolio")
 async def send_portfolio(callback: types.CallbackQuery):
+    # Удаляем текстовое меню
     await callback.message.delete()
+    
     builder = InlineKeyboardBuilder()
     builder.add(types.InlineKeyboardButton(text="🔙 Скрыть и вернуться", callback_data="delete_photo_back"))
     
-    # Отправляем фото
+    # Шлем фото
     photo_msg = await callback.message.answer_photo(
         photo="https://upload.wikimedia.org/wikipedia/commons/thumb/c/c3/Python-logo-notext.svg/1200px-Python-logo-notext.svg.png",
-        caption="📂 <b>Пример работы:</b>\n\nВ реальном проекте здесь будет скриншот вашего бота.",
+        caption="📂 <b>Пример работы:</b>\n\nЗдесь будет ваш проект.",
         reply_markup=builder.as_markup()
     )
-    # Запоминаем ID фото, так как теперь это главное активное сообщение
-    users_last_msg[callback.from_user.id] = photo_msg.message_id
+    # Добавляем фото в список "на удаление" при следующем старте
+    add_msg_to_stack(callback.from_user.id, photo_msg.message_id)
     await callback.answer()
 
 @dp.callback_query(F.data == "delete_photo_back")
 async def delete_photo_back(callback: types.CallbackQuery):
     await callback.message.delete() 
-    menu_msg = await callback.message.answer(
+    # Возвращаем меню
+    msg = await callback.message.answer(
         "👋 <b>Главное меню:</b>",
         reply_markup=get_main_menu()
     )
-    users_last_msg[callback.from_user.id] = menu_msg.message_id
+    add_msg_to_stack(callback.from_user.id, msg.message_id)
     await callback.answer()
 
+# 6. КАЛЬКУЛЯТОР
 @dp.callback_query(F.data == "calc_start")
 async def calc_step_1(callback: types.CallbackQuery):
     builder = InlineKeyboardBuilder()
@@ -185,7 +188,7 @@ async def calc_result(callback: types.CallbackQuery):
     await callback.answer()
 
 async def main():
-    print("Бот ShermentaI (v2.0 Clean) запущен!")
+    print("Бот ShermentaI (Clean Version) запущен!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
